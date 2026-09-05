@@ -3,6 +3,7 @@
 //   renderers: { search, subscribe, notif, settings } 各自渲染到 body
 //   面板定位锚定悬浮按钮；SPA 换页导致面板被清时由 main.js 负责重挂
 // ============================================================
+import { SESSION_KEYS } from '../../shared/constants.js';
 
 const PANEL_ID = 'cc98-ai-panel';
 const PANEL_SIZE_KEY = 'panelSize'; // 面板宽高，存 storage.local，刷新后保留
@@ -98,6 +99,27 @@ function applyPanelSize(panel) {
   } catch (e) { /* 静默 */ }
 }
 
+// 只在面板创建时读取一次开合状态，不监听变化：
+// 已打开的其他 CC98 页面保持原样，新页面 / 刷新 / SPA 重挂载时才恢复。
+function readPanelOpenState() {
+  try {
+    return chrome.storage.session
+      .get(SESSION_KEYS.PANEL_OPEN)
+      .then((o) => !!(o && o[SESSION_KEYS.PANEL_OPEN]))
+      .catch(() => false);
+  } catch (e) {
+    return Promise.resolve(false);
+  }
+}
+
+function savePanelOpenState(isOpen) {
+  try {
+    chrome.storage.session
+      .set({ [SESSION_KEYS.PANEL_OPEN]: !!isOpen })
+      .catch(() => {});
+  } catch (e) { /* 静默 */ }
+}
+
 export function createSidePanel({ renderers }) {
   if (singleton && document.getElementById(PANEL_ID)) return singleton;
 
@@ -121,6 +143,8 @@ export function createSidePanel({ renderers }) {
 
   const tabBtns = {};
   let activeKey = 'search';
+  // 防止异步读取旧状态时覆盖用户刚刚在当前页面执行的开合操作。
+  let visibilityChangedLocally = false;
 
   for (const t of TABS) {
     const b = document.createElement('button');
@@ -146,13 +170,22 @@ export function createSidePanel({ renderers }) {
     }
   }
 
+  function applyOpenState(isOpen) {
+    panel.classList.toggle('open', isOpen);
+    if (isOpen) {
+      // 不重渲染当前 Tab：上次结果原样保留，关闭再打开不丢
+      requestAnimationFrame(() => positionPanelNearButton(panel));
+    }
+  }
   function open() {
-    panel.classList.add('open');
-    // 不重渲染当前 Tab：上次结果原样保留，关闭再打开不丢
-    requestAnimationFrame(() => positionPanelNearButton(panel));
+    visibilityChangedLocally = true;
+    applyOpenState(true);
+    savePanelOpenState(true);
   }
   function close() {
-    panel.classList.remove('open');
+    visibilityChangedLocally = true;
+    applyOpenState(false);
+    savePanelOpenState(false);
   }
   function toggle() {
     panel.classList.contains('open') ? close() : open();
@@ -168,6 +201,10 @@ export function createSidePanel({ renderers }) {
   setActiveTab('search'); // 预渲染，让首次打开有内容
 
   singleton = { open, close, toggle, isOpen, setActiveTab, getActiveTab: () => activeKey, getBody: () => bodyEl };
+  readPanelOpenState().then((isOpen) => {
+    if (visibilityChangedLocally || !document.body.contains(panel)) return;
+    applyOpenState(isOpen);
+  });
   return singleton;
 }
 
@@ -183,7 +220,7 @@ function bindGlobalListeners() {
     if (p.contains(e.target)) return;
     if (e.target && e.target.closest && e.target.closest('#' + PANEL_ID)) return;
     if (e.target && e.target.closest && e.target.closest('#cc98-ai-float-btn')) return;
-    p.classList.remove('open');
+    if (singleton) singleton.close();
   });
 
   // 按钮拖动 / 窗口缩放时，面板若开着就跟随按钮

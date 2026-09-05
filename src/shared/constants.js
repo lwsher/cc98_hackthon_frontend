@@ -62,6 +62,7 @@ export const STORAGE_KEYS = {
 export const SESSION_KEYS = {
   CC98_TOKEN: 'cc98Token',
   CC98_AUTH_TYPE: 'cc98AuthType',
+  PANEL_OPEN: 'panelOpen',       // 面板开合状态（本次浏览器会话内恢复，不实时广播）
 };
 
 // 后台 Service Worker ↔ 内容脚本 消息类型
